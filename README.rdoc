@@ -1,0 +1,61 @@
+= What?
+
+zozo is a tool that makes it easy to reduce the memory footprint of your applications by having them not load rubygems/bundler at runtime:
+
+  $ unicorn -c unicorn.conf -D
+  $ ps ux
+  USER       PID %CPU %MEM   VSZ   RSS TT  STAT  STARTED       TIME COMMAND
+  jeremy   18226  0.0  0.5 17196  4496 ??  S      1:34PM    0:00.01 ruby: unicorn master -c unicorn.conf -D (ruby)
+  jeremy    8473 31.3  3.3 27180 30172 ??  S      1:34PM    0:00.62 ruby: unicorn worker[0] -c unicorn.conf -D (ruby)
+
+  $ zozo -R config.ru unicorn
+  $ ruby -I lib bin/unicorn -c unicorn.conf -D
+  $ ps ux
+  USER       PID %CPU %MEM   VSZ   RSS TT  STAT  STARTED       TIME COMMAND
+  jeremy   17561  0.0  0.4  5548  3908 ??  S      1:35PM    0:00.01 ruby: unicorn master -c unicorn.conf -D (ruby)
+  jeremy   22626  4.2  2.0 15016 17904 ??  S      1:35PM    0:00.25 ruby: unicorn worker[0] -c unicorn.conf -D (ruby)
+
+As you can see, the memory footprint is reduced dramatically:
+
+  master process:
+    VSZ: 5548/17196  => 68% reduction
+    RSS: 3908/4496   => 13% reduction
+  worker process:
+    VSZ: 15016/27180 => 45% reduction
+    RSS: 17904/30172 => 41% reduction
+
+That's a major difference, as a 41% reduction in memory footprint means you can host 68% more workers in the same amount of memory.  It also makes your applications faster. They will start faster because zozo loads all necessary library files into a single directory tree.  They will run faster as there will be fewer ruby objects to check every time the garbage collector is run.
+
+= Why?
+
+Rubygems is a fine package distribution system, but it is not very efficient from a runtime memory standpoint.  If your application uses rubygems in production, every time it starts, rubygems needs to figure out which packages to load.  zozo makes it so that this is calculation is only done once, and the result is cached into a local directory.
+
+= How?
+
+zozo works by starting ruby and checking the current load path.  It then requires all of the command line arguments given, and checks the load path again.  Any new entries in the load path are checked and their contents are loaded into a local directory (lib by default).  By default, zozo uses symlinks, but it can use hard links (-H) or make copies (-c) via a command line option.
+
+In addition, new entries in the load path that end in /bin are loaded into a separate local directory (bin by default).  This allows you to run them with loading rubygems via:
+
+  ruby -I lib bin/$program
+
+zozo adds replacement rubygems.rb, ubygems.rb, and bundler.rb files to the lib directory it creates, so it works transparently if your program requires rubygems and/or bundler.  If you run your program without adding the lib directory zozo creates to the load path, rubygems/bundler will be used as it was.  If you run your program with the lib directory zozo creates in the load path, then rubygems/bundler will not be loaded, and it won't need to be because all other libraries your program uses will already be in the load path.
+
+= Where?
+
+http://github.com/jeremyevans/zozo
+
+= Who?
+
+Jeremy Evans / code@jeremyevans.net
+
+= When?
+
+Now:
+
+  sudo gem install zozo
+
+= Does not work with Rails!
+
+The replacement rubygems.rb and bundler.rb files only do the bare minimum.  The rubygems.rb file adds Kernel#gem, and the bundler.rb file adds Bundler.setup, both of which are defined to do nothing and return nil.  No other features are mocked out.  This means that frameworks that rely on introspecting the running Gem/Bundler configuration (notably Rails) will not work.
+
+This is probably fixable, and I'll accept patches that allow zozo to work with Rails, but I don't plan on working on the issue myself.  As Rails uses a substantial amount of memory by itself, it benefits less from zozo than more memory friendly frameworks such as Sinatra.

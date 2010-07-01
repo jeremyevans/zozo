@@ -1,0 +1,135 @@
+#!/usr/bin/env ruby
+
+# bin/zozo is currently a completely procedural program, with
+# no classes or methods defined.  This may change in the future
+# if more extensibility is desired.
+
+require 'optparse'
+require 'find'
+require 'fileutils'
+
+sep = File::SEPARATOR
+lib_dir = 'lib'
+bin_dir = 'bin'
+ln_method = :ln_s
+ln_opts = {}
+loads = []
+rackups = []
+
+# Parse all command line options
+opt_parser = OptionParser.new do |o|
+  o.banner = "zozo: Simple $LOAD_PATH management for ruby projects"
+  o.define_head "Usage: zozo [-l lib_dir] [-b bin_dir] [-L path] [-R ru_file] [-cfhHnv] lib"
+  o.separator ""
+  o.separator "zozo creates a directory with symbolic links to other directories"
+  o.separator "and files, allowing you to avoid loading rubygems and bundler when"
+  o.separator "running in production with a simple addition of one directory to the"
+  o.separator "$LOAD_PATH."
+  o.separator ""
+  o.separator "Options:"
+
+  o.on("-b", '--bin-dir LIBDIR', "Use a nonstandard bin dir (default: bin)") do |v|
+    bin_dir = v
+  end
+
+  o.on("-c", '--copy', "Copy files instead of creating symbolic links") do
+    ln_method = :cp
+  end
+
+  o.on("-f", '--force', "Force file system modifications") do
+    ln_opts[:force] = true
+  end
+
+  o.on("-h", "-?", "--help", "Show this message and exit") do
+    puts o
+    exit
+  end
+
+  o.on("-H", '--hard-link', "Create hard links instead of symbolic links") do
+    ln_method = :ln
+  end
+
+  o.on("-l", '--lib-dir LIBDIR', "Use a nonstandard lib dir (default: lib)") do |v|
+    lib_dir = v
+  end
+
+  o.on("-L", '--load path', "Use load instead of require for the given argument") do |v|
+    loads << v
+  end
+
+  o.on("-n", '--noop', "Don't make any file system modifications") do
+    ln_opts[:noop] = true
+  end
+
+  o.on("-R", '--rackup ru_file', "Load the given file as a rackup file") do |v|
+    rackups << v
+  end
+
+  o.on("-v", '--verbose', "Log all file system modifications to stderr") do
+    ln_opts[:verbose] = true
+  end
+end
+opt_parser.parse!
+mkdir_opts = ln_opts.reject{|k,v| k == :force}
+
+# Require/load the files specifying by the arguments, and check for new
+# load path entries
+start_dirs = $LOAD_PATH.dup
+ENV['ZOZO'] = '1'
+loads.each{|f| load f}
+unless rackups.empty?
+  begin
+    require 'rack'
+  rescue LoadError
+    require 'rubygems'
+    require 'rack'
+  end
+  rackups.each{|f| eval("Rack::Builder.new{( " + File.read(f) + "\n )}.to_app", nil, f)}
+end
+ARGV.each{|f| require f}
+new_dirs = ($LOAD_PATH - start_dirs).uniq
+
+# Find all files/directories that we want to link to/create
+lns = {}
+bins = {}
+new_dirs.each do |d|
+  Find.find(d) do |f|
+    next if f == d
+    p = f.sub(d, '').sub(sep, '')
+    h = (d =~ /#{sep}bin\z/) ? bins : lns
+    if File.directory?(f)
+      raise(StandardError, "File/directory overlap (file: #{h[p]}, directory: #{f})") if h[p].is_a?(String)
+      h[p] = :dir
+    elsif File.file?(f)
+      raise(StandardError, "File/directory overlap (file: #{f}, directory: #{p})") if h[p] == :dir
+      # Other entry comes before this one in the load path, so ignore it
+      h[p] ||= f
+    end
+  end
+end
+
+# Handle directory creation and file linking/copying
+[[lib_dir, lns], [bin_dir, bins]].each do |dir, h|
+  FileUtils.mkdir(dir, mkdir_opts)
+  h.sort.each do |k, v|
+    p = File.join(dir, k)
+    if v == :dir
+      FileUtils.mkdir(p, mkdir_opts)
+    else
+      FileUtils.send(ln_method, v, p, ln_opts)
+    end
+  end
+end
+
+# Create special files for rubygems and bundler
+%w'rubygems.rb ubygems.rb bundler.rb'
+[['rubygems.rb', "module Kernel; def gem(*args); end end"],
+['ubygems.rb', "require 'rubygems'"],
+['bundler.rb', "module Bundler; def self.setup(*args); end end"]
+].each do |file, data|
+  p = File.join(lib_dir, file)
+  $stderr.puts("Writing #{p}") if ln_opts[:verbose]
+  if ln_opts[:force] || !File.exist?(p)
+    File.open(p, 'wb'){|f| f.puts(data)} unless ln_opts[:noop]
+  end
+end
