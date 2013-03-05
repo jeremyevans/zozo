@@ -1,8 +1,11 @@
 #!/usr/bin/env spec
 
+require 'rbconfig'
 require 'fileutils'
 require 'open3'
 Dir.chdir(File.dirname(File.expand_path(__FILE__)))
+
+RUBY = ENV['RUBY'] || "'#{File.join(RbConfig::CONFIG['bindir'], RbConfig::CONFIG['ruby_install_name'] + RbConfig::CONFIG['EXEEXT']).gsub("'", "'\\''")}'"
 
 context "zozo" do
   after do
@@ -11,11 +14,11 @@ context "zozo" do
   end
 
   def run(args='test1')
-    `#{File.join(File.dirname(File.dirname(File.dirname(File.expand_path(__FILE__)))), 'bin', 'zozo')} #{args}`
+    `#{RUBY} -I. #{File.join(File.dirname(File.dirname(File.dirname(File.expand_path(__FILE__)))), 'bin', 'zozo')} #{args}`
   end
 
   def run3(args='test1', &block)
-    Open3.popen3("#{File.join(File.dirname(File.dirname(File.dirname(File.expand_path(__FILE__)))), 'bin', 'zozo')} #{args}", &block)
+    Open3.popen3("#{RUBY} -I. #{File.join(File.dirname(File.dirname(File.dirname(File.expand_path(__FILE__)))), 'bin', 'zozo')} #{args}", &block)
   end
 
   def ino(f)
@@ -93,7 +96,7 @@ context "zozo" do
 
   it "should load files with load instead of require if the -L option is used" do
     run3('load_test') do |si, so, se|
-      se.read.should =~ /no such file to load -- load_test \(LoadError\)/
+      se.read.should =~ /load_test \(LoadError\)/
       so.read.should == ''
     end
     run('-L load_test').should == ''
@@ -116,7 +119,7 @@ context "zozo" do
 
   it "should load rackup files with Rack::Builder instead of require if the -R option is used" do
     run3('test.ru') do |si, so, se|
-      se.read.should =~ /no such file to load -- test.ru \(LoadError\)/
+      se.read.should =~ /test.ru \(LoadError\)/
       so.read.should == ''
     end
     run('-R test.ru').should == ''
@@ -146,7 +149,7 @@ context "zozo" do
   it "should force file system modifications over existing files if -f option is used" do
     run.should == ''
     run3 do |si, so, se|
-      se.read.should =~ %r{File exists - /data/code/zozo/spec/test1/a or lib/a \(Errno::EEXIST\)}
+      se.read.should =~ %r{File exists.*\(Errno::EEXIST\)}
       so.read.should == ''
     end
     run('-f test1').should == ''
@@ -234,7 +237,7 @@ context "zozo -b and -l arguments" do
   end
 
   it "should create bin and lib directories with given names" do
-    `#{File.join(File.dirname(File.dirname(File.dirname(File.expand_path(__FILE__)))), 'bin', 'zozo')} -b bi -l li test1`
+    `#{RUBY} -I. #{File.join(File.dirname(File.dirname(File.dirname(File.expand_path(__FILE__)))), 'bin', 'zozo')} -b bi -l li test1`
     File.file?('li/a').should be_true
     File.symlink?('li/a').should be_true
     should_be_same('li/a', 'test1/a')
